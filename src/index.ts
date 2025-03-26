@@ -2,6 +2,7 @@ import { WorkerEntrypoint } from 'cloudflare:workers'
 import { ProxyToSelf } from 'workers-mcp'
 import FirecrawlApp, { ScrapeResponse } from '@mendable/firecrawl-js';
 import { GoogleGenAI } from "@google/genai";
+import { formatContentQuery } from './utils';
 
 export interface Env {
 	SHARED_SECRET: string
@@ -46,5 +47,22 @@ export default class MyWorker extends WorkerEntrypoint<Env> {
    **/
   async fetch(request: Request): Promise<Response> {
     return new ProxyToSelf(this).fetch(request)
+  }
+
+  /**
+   * Scrapes content from a URL and asks a question about it.
+   * @param url {string} the URL to scrape content from
+   * @param question {string} the question to ask about the content
+   * @return {Promise<string>} the AI's response about the content
+   */
+  async askAboutUrl(url: string, question: string): Promise<string> {
+    // First scrape the content
+    const content = await this.scrape(url);
+    
+    // Format the prompt with content and question
+    const prompt = formatContentQuery(content, question);
+    
+    // Ask Gemini about the content
+    return this.ask(prompt);
   }
 }
