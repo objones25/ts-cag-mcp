@@ -22,7 +22,7 @@ A Cloudflare Worker that combines web scraping and AI to provide intelligent ans
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
+git clone https://github.com/objones25/ts-cag-mcp.git
 cd ts-cag-mcp
 ```
 
