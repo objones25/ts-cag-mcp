@@ -1,13 +1,12 @@
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { ProxyToSelf } from 'workers-mcp'
-import { formatContentQuery, scrape, ask, scrapeWithRelatedPages } from './utils';
+import { formatContentQuery, ask, scrapeContent } from './utils';
 
 export interface Env {
 	SHARED_SECRET: string
 	FIRE_CRAWL_API_KEY: string
   GEMINI_API_KEY: string
-  CONTENT_CACHE: KVNamespace  // Cache for AI responses
-  SCRAPE_CACHE: KVNamespace   // Cache for scraped content
+  CONTENT_CACHE: KVNamespace  // Combined cache for all content
 }
 
 export default class MyWorker extends WorkerEntrypoint<Env> {
@@ -18,8 +17,9 @@ export default class MyWorker extends WorkerEntrypoint<Env> {
    * @return {Promise<string>} the AI's response about the content
    */
   async askAboutUrl(url: string, question: string): Promise<string> {
-    const responseCacheKey = `response:${url}:${question}`;
-    const scrapeCacheKey = `scrape:${url}`;
+    // Use two distinct cache keys
+    const responseCacheKey = `r:${url}:${question}`;
+    const contentCacheKey = `c:${url}`;
     
     // Try to get the AI response from cache first
     const cachedResponse = await this.env.CONTENT_CACHE.get(responseCacheKey);
@@ -28,63 +28,45 @@ export default class MyWorker extends WorkerEntrypoint<Env> {
     }
 
     try {
-      // Try to get scraped content from cache
-      let content = await this.env.SCRAPE_CACHE.get(scrapeCacheKey);
+      // Determine complexity of the query
+      const isComplexQuery = question.length > 50 || 
+                           question.includes('how') ||
+                           question.includes('explain') ||
+                           question.includes('compare');
       
+      // Try to get scraped content from cache
+      let content = await this.env.CONTENT_CACHE.get(contentCacheKey);
+      
+      // If no cached content, scrape it
       if (!content) {
-        // Determine if multi-page scraping would be beneficial
-        const isDocSite = url.includes('/docs/') || 
-                         url.includes('/documentation/') ||
-                         url.includes('github.com/') ||
-                         url.includes('api-reference') ||
-                         url.includes('/guide/');
+        content = await scrapeContent(url, this.env.FIRE_CRAWL_API_KEY, isComplexQuery);
         
-        // Complex questions typically benefit from more context
-        const isComplexQuery = question.length > 50 || 
-                             question.includes('how') ||
-                             question.includes('explain') ||
-                             question.includes('compare');
-                             
-        // Use multi-page scraping for documentation sites with complex queries
-        if (isDocSite && isComplexQuery) {
-          content = await scrapeWithRelatedPages(url, this.env.FIRE_CRAWL_API_KEY, 3);
-        } else {
-          content = await scrape(url, this.env.FIRE_CRAWL_API_KEY);
-        }
-        
-        // Cache scraped content for 1 week (content changes less frequently)
-        await this.env.SCRAPE_CACHE.put(scrapeCacheKey, content, { expirationTtl: 604800 });
+        // Cache scraped content for 1 week
+        await this.env.CONTENT_CACHE.put(contentCacheKey, content, { expirationTtl: 604800 });
       }
       
+      // Format prompt and get AI response
       const prompt = formatContentQuery(content, question);
       const response = await ask(prompt, this.env.GEMINI_API_KEY);
       
-      // Cache AI response for 24 hours (responses might need to be fresher)
+      // Cache the response for 24 hours
       await this.env.CONTENT_CACHE.put(responseCacheKey, response, { expirationTtl: 86400 });
       
       return response;
     } catch (error) {
       console.error('Error in askAboutUrl:', error);
-      
       const errorMessage = error instanceof Error ? error.message : String(error);
       
-      // If we failed to scrape, respond gracefully
+      // Return user-friendly error messages
       if (errorMessage.includes('Failed to scrape')) {
-        return `I'm sorry, I was unable to access the content at that URL. This could be due to:
-- The website blocking automated access
-- The URL being invalid or requiring authentication
-- The site's structure being incompatible with our scraper
-
-Could you check the URL and try again, or perhaps provide a different source?`;
+        return `I'm sorry, I was unable to access the content at that URL. Please check the URL or try a different source.`;
       }
       
-      // For API errors (like Gemini limits)
       if (errorMessage.includes('rate') || errorMessage.includes('quota') || errorMessage.includes('limit')) {
-        return `I'm sorry, I encountered a temporary limit while processing your request. Please try again in a few moments.`;
+        return `I encountered a temporary limit while processing your request. Please try again in a few moments.`;
       }
       
-      // Generic error
-      return `I apologize, but I encountered an error while processing your request: ${errorMessage}. Please try again or try with a different URL.`;
+      return `I encountered an error processing your request. Please try again or use a different URL.`;
     }
   }
 
