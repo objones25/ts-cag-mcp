@@ -5,10 +5,17 @@ import { GoogleGenAI } from "@google/genai";
  * Formats a prompt for asking questions about content
  */
 export function formatContentQuery(content: string, question: string): string {
-  return `Given this content:
+  return `You are a helpful AI assistant that provides accurate, concise answers based on the given content. 
+Your task is to answer questions using ONLY the information provided in the content below.
+If the answer cannot be found in the content, say so clearly.
+Always cite specific parts of the content to support your answers.
+
+Content:
 ${content}
 
-Answer this question: ${question}`;
+Question: ${question}
+
+Answer: `;
 }
 
 /**
