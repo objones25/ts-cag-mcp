@@ -6,7 +6,8 @@ export interface Env {
 	SHARED_SECRET: string
 	FIRE_CRAWL_API_KEY: string
   GEMINI_API_KEY: string
-  CONTENT_CACHE: KVNamespace
+  CONTENT_CACHE: KVNamespace  // Cache for AI responses
+  SCRAPE_CACHE: KVNamespace   // Cache for scraped content
 }
 
 export default class MyWorker extends WorkerEntrypoint<Env> {
@@ -17,41 +18,49 @@ export default class MyWorker extends WorkerEntrypoint<Env> {
    * @return {Promise<string>} the AI's response about the content
    */
   async askAboutUrl(url: string, question: string): Promise<string> {
-    const cacheKey = `${url}:${question}`;
+    const responseCacheKey = `response:${url}:${question}`;
+    const scrapeCacheKey = `scrape:${url}`;
     
-    // Try to get from cache first
-    const cachedResponse = await this.env.CONTENT_CACHE.get(cacheKey);
+    // Try to get the AI response from cache first
+    const cachedResponse = await this.env.CONTENT_CACHE.get(responseCacheKey);
     if (cachedResponse) {
       return cachedResponse;
     }
 
     try {
-      // Determine if multi-page scraping would be beneficial
-      const isDocSite = url.includes('/docs/') || 
-                       url.includes('/documentation/') ||
-                       url.includes('github.com/') ||
-                       url.includes('api-reference') ||
-                       url.includes('/guide/');
+      // Try to get scraped content from cache
+      let content = await this.env.SCRAPE_CACHE.get(scrapeCacheKey);
       
-      // Complex questions typically benefit from more context
-      const isComplexQuery = question.length > 50 || 
-                           question.includes('how') ||
-                           question.includes('explain') ||
-                           question.includes('compare');
-                           
-      // Use multi-page scraping for documentation sites with complex queries
-      let content: string;
-      if (isDocSite && isComplexQuery) {
-        content = await scrapeWithRelatedPages(url, this.env.FIRE_CRAWL_API_KEY, 3);
-      } else {
-        content = await scrape(url, this.env.FIRE_CRAWL_API_KEY);
+      if (!content) {
+        // Determine if multi-page scraping would be beneficial
+        const isDocSite = url.includes('/docs/') || 
+                         url.includes('/documentation/') ||
+                         url.includes('github.com/') ||
+                         url.includes('api-reference') ||
+                         url.includes('/guide/');
+        
+        // Complex questions typically benefit from more context
+        const isComplexQuery = question.length > 50 || 
+                             question.includes('how') ||
+                             question.includes('explain') ||
+                             question.includes('compare');
+                             
+        // Use multi-page scraping for documentation sites with complex queries
+        if (isDocSite && isComplexQuery) {
+          content = await scrapeWithRelatedPages(url, this.env.FIRE_CRAWL_API_KEY, 3);
+        } else {
+          content = await scrape(url, this.env.FIRE_CRAWL_API_KEY);
+        }
+        
+        // Cache scraped content for 1 week (content changes less frequently)
+        await this.env.SCRAPE_CACHE.put(scrapeCacheKey, content, { expirationTtl: 604800 });
       }
       
       const prompt = formatContentQuery(content, question);
       const response = await ask(prompt, this.env.GEMINI_API_KEY);
       
-      // Cache successful responses (24 hours)
-      await this.env.CONTENT_CACHE.put(cacheKey, response, { expirationTtl: 86400 });
+      // Cache AI response for 24 hours (responses might need to be fresher)
+      await this.env.CONTENT_CACHE.put(responseCacheKey, response, { expirationTtl: 86400 });
       
       return response;
     } catch (error) {

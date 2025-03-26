@@ -42,12 +42,12 @@ export async function scrape(url: string, apiKey: string): Promise<string> {
 }
 
 /**
- * Discovers and scrapes related pages from a base URL
+ * Discovers and scrapes related pages from a base URL using batch scraping
  */
 export async function scrapeWithRelatedPages(baseUrl: string, apiKey: string, maxPages: number = 3): Promise<string> {
   const app = new FirecrawlApp({ apiKey });
-  const results: string[] = [];
   const scrapedUrls = new Set<string>();
+  let allContent: string[] = [];
   
   // First scrape the primary URL
   try {
@@ -56,12 +56,12 @@ export async function scrapeWithRelatedPages(baseUrl: string, apiKey: string, ma
       onlyMainContent: true
     }) as ScrapeResponse;
     
-    if (mainResult.success && mainResult.markdown) {
-      results.push(`## Content from: ${baseUrl}\n\n${mainResult.markdown}`);
-      scrapedUrls.add(baseUrl);
-    } else {
+    if (!mainResult.success || !mainResult.markdown) {
       throw new Error(`Failed to scrape main URL: ${mainResult.error || 'Unknown error'}`);
     }
+
+    scrapedUrls.add(baseUrl);
+    allContent = [`## Content from: ${baseUrl}\n\n${mainResult.markdown}`];
     
     // For documentation sites, try to find related pages
     if (maxPages > 1 && (
@@ -92,30 +92,32 @@ export async function scrapeWithRelatedPages(baseUrl: string, apiKey: string, ma
           return isDocPage && !isNotDocPage;
         })
         .slice(0, maxPages - 1);
-        
-      // Scrape each related page
-      for (const relatedUrl of relatedUrls) {
-        try {
-          const result = await app.scrapeUrl(relatedUrl, { 
-            formats: ['markdown'],
-            onlyMainContent: true
-          }) as ScrapeResponse;
-          
-          if (result.success && result.markdown) {
-            results.push(`## Content from: ${relatedUrl}\n\n${result.markdown}`);
-            scrapedUrls.add(relatedUrl);
-          }
-        } catch (error) {
-          console.error(`Error scraping ${relatedUrl}:`, error);
+
+      if (relatedUrls.length > 0) {
+        // Use batch scraping for related URLs
+        const batchResult = await app.batchScrapeUrls(relatedUrls, {
+          formats: ['markdown'],
+          onlyMainContent: true
+        });
+
+        if (batchResult.success && batchResult.data) {
+          // Add successful scrapes to our content
+          batchResult.data.forEach((result: any) => {
+            if (result.success && result.markdown) {
+              allContent.push(`## Content from: ${result.metadata.url}\n\n${result.markdown}`);
+              scrapedUrls.add(result.metadata.url);
+            }
+          });
         }
       }
     }
     
-    return results.join('\n\n');
+    return allContent.join('\n\n');
   } catch (error) {
     console.error('Error in scrapeWithRelatedPages:', error);
-    if (results.length > 0) {
-      return results.join('\n\n');
+    // If we at least got the main content, return that
+    if (scrapedUrls.has(baseUrl)) {
+      return allContent[0];
     }
     throw error;
   }

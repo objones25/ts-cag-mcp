@@ -14,6 +14,10 @@
 		{
 			"binding": "CONTENT_CACHE",
 			"id": "27fa12f017a048b7aae5717fa785e481"
+		},
+		{
+			"binding": "SCRAPE_CACHE",
+			"id": "0f7e44fcb9a1498fa5ec8545b80cef61"
 		}
 	]
 	/**
